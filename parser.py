@@ -25,6 +25,14 @@ def get_html(url, params=None):
     r = requests.get(url, headers=HEADERS, params=params)
     return r
 
+def get_pages_count (html):
+    soup = BeautifulSoup(html, 'html.parser')
+    pagination = soup.find_all('li')
+    if pagination:
+        return int(pagination[-2].get_text())
+    else:
+        return 1
+
 def parse_OKPO(INN):
     HEADERS_OKPO = {
         'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Mobile Safari/537.36',
@@ -47,11 +55,10 @@ def parse_OKPO(INN):
             get_content(html.text)
         else:
             print("Error OKPO")
-
+objects = []
 def get_content(html):
     soup = BeautifulSoup(html, 'html.parser')
     items = soup.find_all('div', class_='company-item')
-    objects = []
     len(items)
     i=0
     for item in items:
@@ -74,16 +81,22 @@ def get_content(html):
             'Date': null_value('Дата регистрации'),
             'Capital': null_value('Уставный капитал')
          })
-        print(objects[i])
         i += 1
-    print(len(objects))
 def parse(url):
     html = get_html(url)
     if html.status_code == 200:
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            executor.map(get_content(html.text), url)
+        items = []
+        pages_count = get_pages_count(html.text)
+        for page in range(1, pages_count + 1):
+            print(f'Парсинг страницы {page} из {pages_count}')
+            html = get_html(url + f'/{page}')
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                (executor.map(get_content(html.text), url))
+        print(len(objects))
     else:
         print("Error")
+
+
 
 
 parse(URL2)
