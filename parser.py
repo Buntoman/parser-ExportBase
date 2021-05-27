@@ -13,12 +13,7 @@ HEADERS = {
     'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Mobile Safari/537.36',
     'accept': '*/*'}
 
-
-def get_html(url, params=None):
-    r = requests.get(url, headers=HEADERS, params=params)
-    return r
-
-
+#Получает колличество страниц в списке
 def get_pages_count(html):
     soup = BeautifulSoup(html, 'html.parser')
     pagination = soup.find_all('li')
@@ -28,6 +23,11 @@ def get_pages_count(html):
         return 1
 
 
+def get_html(url, params=None):
+    r = requests.get(url, headers=HEADERS, params=params)
+    return r
+
+#функция получения ОКПО через ИНН, через сторонний сайт. Не используется, так как не может обрабатывать много запросов
 def get_OKPO(INN):
     HEADERS_OKPO = {
         'user-agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Mobile Safari/537.36',
@@ -56,26 +56,26 @@ def get_OKPO(INN):
 
 objects = []
 
-
+#Функция получения контента
 def get_content(html):
     soup = BeautifulSoup(html, 'html.parser')
     items = soup.find_all('div', class_='company-item')
     len(items)
     i = 0
+    #Специальное условие для статуса организации, так как для разных статусов используется разный стиль, либо статуса просто нет
     for item in items:
-        # print (item)
         Status = item.find('span', class_="attention-text") or item.find('span', class_="warning-text")
         if Status:
             Status = Status.get_text()
         else:
             Status = 'Действующая'
-
+        #Функция проверки пустых значений
         def null_value(value):
             if item.find(text=value):
                 return item.find(text=value).find_next('dd').get_text()
             else:
                 return 'null'
-
+        #Получение и запись в словарь данных с сайта
         objects.append({
             'title': item.find('div', class_="company-item__title").get_text(strip=True),
             'OGRN': null_value('ОГРН'),
@@ -89,8 +89,9 @@ def get_content(html):
         # })
         i += 1
 
-
+#Функция парсера
 def parse(url):
+    #Функция для получения имени базы данных
     def get_name_db(url):
         def get_html(url, params=None):
             r = requests.get(url, headers=HEADERS, params=params)
@@ -106,18 +107,20 @@ def parse(url):
             return get_content(html.text)
         else:
             print("Error Имя базы данных")
-
     name_bd = get_name_db(url)
+    print(f'Парсинг страницы {name_bd}')
     html = get_html(url)
+    #Непосредственно парсинг сайта
     if html.status_code == 200:
-        items = []
         pages_count = get_pages_count(html.text)
         for page in range(1, pages_count + 1):
             print(f'Парсинг страницы {page} из {pages_count}')
             html = get_html(url + f'/{page}')
-            with concurrent.futures.ThreadPoolExecutor() as executor:
+            #Использую метод map модуля concurrent.futures для вызова функции в отдельном потоке (макс. 5)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
                 (executor.map(get_content(html.text), url))
         print(f'Найдено и обработано {len(objects)} объектов')
+        #Проверяю подключение к базе данных
         try:
             connection = pymysql.connect(
                 host=host,
@@ -128,11 +131,10 @@ def parse(url):
                 cursorclass=pymysql.cursors.DictCursor
             )
             print("Подключение установлено")
-            print("#" * 20)
 
             try:
                 with connection.cursor() as cursor:
-
+                    #Создаю таблицу, если ее нет, для конкретного кода ОКВЭД
                     create_table_query = f"CREATE TABLE IF NOT EXISTS`{name_bd}`(id int AUTO_INCREMENT," \
                                          " Title_comp varchar(32)," \
                                          " OGRN varchar(32)," \
@@ -142,17 +144,18 @@ def parse(url):
                                          " Capital varchar(32), PRIMARY KEY (id));"
                     cursor.execute(create_table_query)
                     print(f"Таблица \"{name_bd}\" создана или была создана раньше")
-                    print("#" * 20)
+                    #Для поддержания актуальных данных в таблице, все старые данные удаляются
                     delete_table_query = f"DELETE FROM`{name_bd}`;"
                     cursor.execute(delete_table_query)
                     connection.commit()
+                    #Запись данных в таблицу
                     for item in objects:
                         a = ()
                         a = (str(item['title']), str(item['OGRN']), str(item['INN']), str(item['Status']), str(item['Date']), str(item['Capital']),)
-                        #insert_query = f"INSERT INTO `users` (Title_comp, OGRN, INN, Status, Date_reg, Capital) VALUES (str({item['title']}),str({item['OGRN']}),str({item['INN']}),str({item['Status']}),{item['Date']},str({item['Capital']}));"
                         insert_query = f"INSERT INTO `{name_bd}` (`Title_comp`, `OGRN`, `INN`, `Status`, `Date_reg`, `Capital`) VALUES (%s, %s, %s, %s, %s, %s);"
                         cursor.execute(insert_query, a)
                         connection.commit()
+                    print(f'Данные со страницы {name_bd} записаны в базу данных')
             finally:
                 connection.close()
         except Exception as ex:
